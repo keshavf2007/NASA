@@ -1,0 +1,11 @@
+name: field_shift_server
+description: Dart NASA data gateway for Field Shift.
+publish_to: none
+environment:
+  sdk: ^3.14.0
+dependencies:
+  http: ^1.2.2
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+dev_dependencies:
+  lints: ^6.0.0

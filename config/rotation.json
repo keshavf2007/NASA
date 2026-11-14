@@ -1,0 +1,18 @@
+{
+  "weights": {
+    "rotation_benefit": 0.35,
+    "water_fit": 0.25,
+    "soil_fit": 0.2,
+    "climate_risk": 0.15,
+    "season_fit": 0.05
+  },
+  "thresholds": {
+    "high_confidence": 0.75,
+    "medium_confidence": 0.5,
+    "same_family_penalty": 25,
+    "repeat_family_lookback": 2
+  },
+  "disclaimer": "Estimates from satellite and climate data. Confirm with a local soil test and your agriculture officer.",
+  "crops_file": "config/crops.json"
+}
+

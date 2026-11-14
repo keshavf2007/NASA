@@ -1,0 +1,75 @@
+{
+  "provider": "live",
+  "live_gateway": {
+    "base_url": "http://localhost:8080/api",
+    "cmr_granules_endpoint": "https://cmr.earthdata.nasa.gov/search/granules.json",
+    "appeears_endpoint": "https://appeears.earthdatacloud.nasa.gov/api",
+    "earthdata_auth": "EARTHDATA_TOKEN or EARTHDATA_USERNAME/EARTHDATA_PASSWORD"
+  },
+  "region": {
+    "name": "Nagpur district, Maharashtra, India",
+    "center": {
+      "latitude": 21.1458,
+      "longitude": 79.0882
+    }
+  },
+  "sources": {
+    "smap_l4_soil_moisture": {
+      "dataset_id": "SPL4SMGP.007",
+      "endpoint": "https://disc.gsfc.nasa.gov/datasets/SPL4SMGP_007/summary",
+      "resolution": "about 9 km",
+      "role": "regional soil-moisture context",
+      "latency": "a couple of days",
+      "plot_level_label": "estimated"
+    },
+    "landsat_8_9": {
+      "dataset_id": "LANDSAT_LC08_C02_T1_L2",
+      "endpoint": "https://landsatlook.usgs.gov/",
+      "resolution": "30 m",
+      "role": "plot-level crop health",
+      "revisit": "8-16 days"
+    },
+    "modis_ndvi": {
+      "dataset_id": "MOD13Q1",
+      "endpoint": "https://lpdaac.usgs.gov/products/mod13q1v061/",
+      "resolution": "250 m",
+      "role": "longer crop-health history"
+    },
+    "nasa_power": {
+      "dataset_id": "POWER",
+      "endpoint": "https://power.larc.nasa.gov/api/",
+      "resolution": "about 50 km",
+      "role": "rainfall, temperature, and solar context"
+    },
+    "soilgrids": {
+      "dataset_id": "soilgrids",
+      "endpoint": "https://rest.isric.org/soilgrids/v2.0/",
+      "resolution": "about 250 m",
+      "role": "baseline soil pH, organic carbon, nitrogen, and texture"
+    },
+    "srtm": {
+      "dataset_id": "SRTMGL1",
+      "endpoint": "https://lpdaac.usgs.gov/products/srtmgl1v003/",
+      "resolution": "30 m",
+      "role": "elevation and slope"
+    },
+    "nex_gddp_cmip6": {
+      "dataset_id": "NEX-GDDP-CMIP6",
+      "endpoint": "https://registry.opendata.aws/nex-gddp-cmip6/",
+      "resolution": "about 25 km",
+      "role": "next-two-season heat and rainfall risk scenarios",
+      "interpretation": "scenario, not forecast"
+    },
+    "gibs": {
+      "dataset_id": "GIBS",
+      "endpoint": "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/",
+      "role": "browse imagery and time slider",
+      "layers": [
+        "SMAP_L4_SM_gph_2015",
+        "MODIS_Terra_NDVI_16Day"
+      ]
+    }
+  },
+  "live_api_note": "Dataset IDs and endpoints must be verified before enabling LiveProvider. MockProvider remains available as fallback."
+}
+

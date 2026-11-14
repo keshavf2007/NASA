@@ -1,0 +1,4 @@
+Field Shift NASA gateway listening on http://0.0.0.0:8080
+2026-11-15T02:06:49.542945  0:00:00.007023 GET     [200] /api/health
+2026-11-15T02:06:49.571552  0:00:00.000261 GET     [200] /api/health
+2026-11-15T02:07:09.420730  0:00:03.042492 GET     [200] /api/dashboard?lat=21.1458&lon=79.0882
