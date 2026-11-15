@@ -2,10 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'rotation_engine.dart';
 
 class NasaGateway {
   NasaGateway({http.Client? client}) : _client = client ?? http.Client();
   final http.Client _client;
+  final processor = NasaDataProcessor();
+  final rotationEngine = RotationEngine();
 
   static const _cmr = 'https://cmr.earthdata.nasa.gov/search';
   static const _power = 'https://power.larc.nasa.gov/api/temporal/daily/point';
@@ -25,6 +28,19 @@ class NasaGateway {
       earthdataCollections(),
       granules(latitude: latitude, longitude: longitude, start: day.subtract(const Duration(days: 30)), end: day),
     ]);
+    final processed = processor.summarize(
+      results[0] as Map<String, dynamic>,
+      results[2] as List<Map<String, dynamic>>,
+    );
+    final analysis = rotationEngine.analyze(
+      currentCrop: 'Cotton',
+      season: _nextSeason(day),
+      soilPh: 6.7,
+      soilMoisture: processed['soil_moisture_outlook'] as double,
+      rainfallMm: processed['rainfall_mm'] as double,
+      temperatureC: processed['temperature_c'] as double,
+      weatherValid: processed['weather_valid'] as bool,
+    );
     return {
       'provider': 'nasa-gateway',
       'coordinates': {'latitude': latitude, 'longitude': longitude},
@@ -32,11 +48,45 @@ class NasaGateway {
       'power': results[0],
       'earthdata': results[1],
       'granules': results[2],
+      'processed': processed,
+      'rotation_analysis': analysis,
       'gibs': {
         'tile_template': gibsTileTemplate,
         'note': 'GIBS provides browse imagery; it is not a plot-level measurement.',
       },
     };
+  }
+
+  Map<String, dynamic> analyzeRotation({
+    required String currentCrop,
+    required String season,
+    required double soilPh,
+    required double soilMoisture,
+    required double rainfallMm,
+    required double temperatureC,
+    required bool weatherValid,
+    List<String> priorities = const [],
+    Map<String, double> priorityWeights = const {},
+    String? soilType,
+  }) {
+    return rotationEngine.analyze(
+      currentCrop: currentCrop,
+      season: season,
+      soilPh: soilPh,
+      soilMoisture: soilMoisture,
+      rainfallMm: rainfallMm,
+      temperatureC: temperatureC,
+      weatherValid: weatherValid,
+      priorities: priorities,
+      priorityWeights: priorityWeights,
+      soilType: soilType,
+    );
+  }
+
+  String _nextSeason(DateTime date) {
+    if (date.month >= 6 && date.month <= 10) return 'Rabi';
+    if (date.month >= 2 && date.month <= 5) return 'Kharif';
+    return 'Zaid';
   }
 
   Future<List<Map<String, dynamic>>> granules({

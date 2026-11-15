@@ -1,3 +1,5 @@
+import 'package:flutter_localizations/flutter_localizations.dart' hide GlobalMaterialLocalizations, GlobalCupertinoLocalizations;
+import 'package:cupertino_ui/cupertino_ui.dart' show GlobalCupertinoLocalizations;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
@@ -108,13 +110,43 @@ const rotationOptions = [
   RotationOption('Soybean', 68, ['A familiar legume crop.', 'Medium water need.', 'Can improve rotation.'], 'Do not repeat if pests remain.', 'Medium'),
 ];
 
-class FieldShiftApp extends StatefulWidget {
-  const FieldShiftApp({super.key});
+class FieldShiftApp extends StatelessWidget {
+  const FieldShiftApp({this.loadLiveOnStart = true, super.key});
+  final bool loadLiveOnStart;
+
   @override
-  State<FieldShiftApp> createState() => _FieldShiftAppState();
+  Widget build(BuildContext context) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Field Shift',
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('en', 'US'),
+          Locale('hi', 'IN'),
+          Locale('mr', 'IN'),
+        ],
+        theme: ThemeData(
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xffe43e98), brightness: Brightness.light),
+          scaffoldBackgroundColor: const Color(0xfff8f9fd),
+          fontFamily: 'Arial',
+        ),
+        home: HomeShell(loadLiveOnStart: loadLiveOnStart),
+      );
 }
 
-class _FieldShiftAppState extends State<FieldShiftApp> {
+class HomeShell extends StatefulWidget {
+  const HomeShell({this.loadLiveOnStart = true, super.key});
+  final bool loadLiveOnStart;
+
+  @override
+  State<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<HomeShell> {
   AppLanguage language = AppLanguage.english;
   int tab = 0;
   Plot? selectedPlot;
@@ -123,6 +155,20 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
   String? liveError;
   bool locating = false;
   int liveGranuleCount = 0;
+  bool refreshing = false;
+  double timeOffset = 0;
+  String activeDataset = 'SMAP Moisture';
+  DateTime? liveDate;
+  Map<String, dynamic>? liveDashboard;
+  List<RotationOption> liveRotationOptions = rotationOptions;
+  List<Map<String, dynamic>> twoSeasonPlan = const [];
+  List<Map<String, dynamic>> liveRisks = const [];
+  Map<String, dynamic>? processedData;
+  String selectedCurrentCrop = 'Cotton';
+  String? selectedSoilType;
+  List<String> selectedPriorities = const ['less_water'];
+  Map<String, double> selectedPriorityWeights = const {'less_water': 0.8};
+  bool applyingPreferences = false;
   double? latitude;
   double? longitude;
   String locationLabel = 'Nagpur, MH';
@@ -134,22 +180,40 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
   @override
   void initState() {
     super.initState();
-    _loadLiveDashboard();
+    if (widget.loadLiveOnStart) {
+      _loadLiveDashboard();
+    } else {
+      liveLoading = false;
+      liveConnected = true;
+    }
   }
 
-  Future<void> _loadLiveDashboard({double latitude = 21.1458, double longitude = 79.0882}) async {
+  Future<void> _loadLiveDashboard({
+    double latitude = 21.1458,
+    double longitude = 79.0882,
+    DateTime? date,
+  }) async {
+    final initialLoad = liveDashboard == null;
     setState(() {
-      liveLoading = true;
+      liveLoading = initialLoad;
+      refreshing = !initialLoad;
       liveError = null;
     });
-    final dashboard = await api.loadDashboard(latitude: latitude, longitude: longitude);
+    final dashboard = await api.loadDashboard(latitude: latitude, longitude: longitude, date: date);
     if (!mounted) return;
-    if (dashboard == null || dashboard['provider'] != 'nasa-gateway') {
+    final provider = dashboard?['provider'];
+    if (dashboard == null || (provider != 'nasa-gateway' && provider != 'field-shift-python')) {
       setState(() {
         liveLoading = false;
-        liveConnected = false;
-        liveError = 'Live NASA data is unavailable. Start the Dart gateway and try again.';
+        refreshing = false;
+        if (initialLoad) {
+          liveConnected = false;
+          liveError = 'Live NASA data is unavailable. Start the Dart gateway and try again.';
+        }
       });
+      if (!initialLoad) {
+        messengerKey.currentState?.showSnackBar(const SnackBar(content: Text('No live NASA data was returned for that date.')));
+      }
       return;
     }
     {
@@ -159,10 +223,176 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
           : 0;
       setState(() {
         liveLoading = false;
+        refreshing = false;
         liveConnected = true;
         liveGranuleCount = count;
+        liveDate = date ?? DateTime.now().toUtc();
+        liveDashboard = dashboard;
+        processedData = dashboard['processed'] is Map<String, dynamic> ? dashboard['processed'] as Map<String, dynamic> : null;
+        final analysis = dashboard['rotation_analysis'];
+        if (analysis is Map<String, dynamic>) {
+          _applyRotationAnalysis(analysis);
+        }
       });
     }
+
+  }
+
+  List<RotationOption> _parseRotationOptions(dynamic value) {
+    if (value is! List) return rotationOptions;
+    final parsed = value.whereType<Map<String, dynamic>>().map((item) {
+      return RotationOption(
+        item['crop'] as String? ?? 'Unknown crop',
+        (item['score'] as num?)?.toDouble() ?? 0,
+        (item['reasons'] as List<dynamic>? ?? const []).whereType<String>().toList(),
+        item['risk'] as String? ?? 'Confirm with a local agriculture officer.',
+        item['water_need'] as String? ?? 'Medium',
+      );
+    }).toList();
+    return parsed.isEmpty ? rotationOptions : parsed;
+  }
+
+  void _applyRotationAnalysis(Map<String, dynamic> analysis) {
+    liveRotationOptions = _parseRotationOptions(analysis['recommendations']);
+    twoSeasonPlan = (analysis['two_season_plan'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    liveRisks = (analysis['risks'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+  }
+
+  Future<void> _collectFieldInformation() async {
+    try {
+      final result = await showModalBottomSheet<Map<String, dynamic>>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (context) {
+        var crop = selectedCurrentCrop;
+        String? soil = selectedSoilType;
+        final priorityWeights = <String, double>{
+          'less_water': selectedPriorityWeights['less_water'] ?? 0.0,
+          'better_income': selectedPriorityWeights['better_income'] ?? 0.0,
+          'soil_fit': selectedPriorityWeights['soil_fit'] ?? 0.0,
+          'climate_resilience': selectedPriorityWeights['climate_resilience'] ?? 0.0,
+        };
+        const cropNames = ['Cotton', 'Soybean', 'Chickpea (gram)', 'Sorghum (jowar)', 'Maize', 'Mandarin orchard'];
+        const soilTypes = ['black soil', 'red soil', 'sandy soil', 'clay soil'];
+        final priorityLabels = {
+          'less_water': t('priority_less_water'),
+          'better_income': t('priority_income'),
+          'soil_fit': t('priority_soil'),
+          'climate_resilience': t('priority_climate'),
+        };
+        return StatefulBuilder(
+          builder: (context, setSheetState) => SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(20, 18, 20, MediaQuery.viewInsetsOf(context).bottom + 20),
+              child: SingleChildScrollView(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(t('tell_field'), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 6),
+                  Text(t('field_form_help')),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    initialValue: crop,
+                    decoration: InputDecoration(labelText: t('current_crop'), border: const OutlineInputBorder()),
+                    items: cropNames.map((value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+                    onChanged: (value) => setSheetState(() => crop = value ?? crop),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: soil,
+                    decoration: InputDecoration(labelText: t('soil_type'), hintText: t('soil_unknown'), border: const OutlineInputBorder()),
+                    items: soilTypes.map((value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+                    onChanged: (value) => setSheetState(() => soil = value),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(t('set_priorities'), style: const TextStyle(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  Text(t('priority_help')),
+                  const SizedBox(height: 8),
+                  ...priorityLabels.entries.map((entry) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Expanded(child: Text(entry.value, style: const TextStyle(fontWeight: FontWeight.w700))),
+                            Text('${(priorityWeights[entry.key]! * 100).round()}%'),
+                          ]),
+                          Slider(
+                            value: priorityWeights[entry.key]!,
+                            min: 0,
+                            max: 1,
+                            divisions: 10,
+                            label: '${(priorityWeights[entry.key]! * 100).round()}%',
+                            onChanged: (value) => setSheetState(() => priorityWeights[entry.key] = value),
+                          ),
+                        ],
+                      )),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(context, {
+                        'crop': crop,
+                        'soil': soil,
+                        'priorityWeights': Map<String, double>.from(priorityWeights),
+                      }),
+                      child: Text(t('analyze_field')),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        );
+        },
+      );
+      if (result == null || !mounted) return;
+      setState(() {
+        selectedCurrentCrop = result['crop'] as String;
+        selectedSoilType = result['soil'] as String?;
+        selectedPriorityWeights = (result['priorityWeights'] as Map).map(
+          (key, value) => MapEntry(key.toString(), (value as num).toDouble()),
+        );
+        selectedPriorities = selectedPriorityWeights.entries.where((entry) => entry.value > 0).map((entry) => entry.key).toList();
+        applyingPreferences = true;
+      });
+      final analysis = await api.loadRecommendations(
+        currentCrop: selectedCurrentCrop,
+        season: 'Rabi',
+        soilPh: selectedPlot?.ph ?? 6.7,
+        soilType: selectedSoilType,
+        priorities: selectedPriorities,
+        priorityWeights: selectedPriorityWeights,
+        weather: processedData,
+      );
+      if (!mounted) return;
+      setState(() {
+        applyingPreferences = false;
+        if (analysis != null) _applyRotationAnalysis(analysis);
+      });
+      messengerKey.currentState?.showSnackBar(SnackBar(
+        content: Text(analysis == null ? 'Could not analyze the field. Is the NASA gateway running?' : 'Recommendations updated for your priorities.'),
+      ));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => applyingPreferences = false);
+      messengerKey.currentState?.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 8),
+        content: Text('Field analysis failed: ${error.toString().replaceFirst('Bad state: ', '')}'),
+      ));
+    }
+  }
+
+  DateTime get _selectedDate => DateTime.now().toUtc().add(Duration(days: timeOffset.round()));
+
+  String get _timeLabel {
+    if (timeOffset == 0) return 'Live';
+    final days = timeOffset.round().abs();
+    return timeOffset < 0 ? '-$days Days' : '+$days Days • Estimated';
   }
 
   Future<void> _detectLocation() async {
@@ -202,19 +432,11 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Field Shift',
-      scaffoldMessengerKey: messengerKey,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xffe43e98), brightness: Brightness.light),
-        scaffoldBackgroundColor: const Color(0xfff8f9fd),
-        fontFamily: 'Arial',
-      ),
-      home: Scaffold(
+    return ScaffoldMessenger(
+      key: messengerKey,
+      child: Scaffold(
         body: SafeArea(
-          child: selectedPlot == null ? _liveBody() : PlotDetail(plot: selectedPlot!, t: t, onBack: () => setState(() => selectedPlot = null)),
+          child: selectedPlot == null ? _liveBody() : PlotDetail(plot: selectedPlot!, options: liveRotationOptions, language: language, t: t, onBack: () => setState(() => selectedPlot = null)),
         ),
         bottomNavigationBar: selectedPlot == null ? _navigation() : null,
       ),
@@ -232,7 +454,7 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.cloud_off, size: 52, color: Color(0xffe43e98)),
             const SizedBox(height: 14),
-            const Text('NASA LIVE DATA REQUIRED', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+            Text(t('live_required'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
             const SizedBox(height: 8),
             Text(liveError!, textAlign: TextAlign.center),
             const SizedBox(height: 6),
@@ -247,12 +469,12 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
               style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 4),
-            const Text('This starts the NASA gateway and Flutter together.', textAlign: TextAlign.center),
+            Text(t('gateway_hint'), textAlign: TextAlign.center),
             const SizedBox(height: 14),
             FilledButton.icon(
               onPressed: _loadLiveDashboard,
               icon: const Icon(Icons.refresh),
-              label: const Text('Retry live connection'),
+              label: Text(t('retry_live')),
             ),
           ]),
         ),
@@ -344,6 +566,16 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
           const SizedBox(height: 4),
           Text(t('answer_first'), style: Theme.of(context).textTheme.bodyLarge),
           const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              onPressed: applyingPreferences ? null : _collectFieldInformation,
+              icon: const Icon(Icons.tune),
+              label: Text(t('tell_field')),
+            ),
+          ),
+          const SizedBox(height: 16),
           ...plots.map((plot) => PlotCard(
                 plot: plot,
                 t: t,
@@ -360,9 +592,9 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                _datasetPill('SMAP Moisture', Icons.water_drop, true),
-                _datasetPill('Landsat NDVI', Icons.spa, false),
-                _datasetPill('Thermal Stress', Icons.thermostat, false),
+                _datasetPill(t('smap_moisture'), 'SMAP Moisture', Icons.water_drop, activeDataset == 'SMAP Moisture'),
+                _datasetPill(t('landsat_ndvi'), 'Landsat NDVI', Icons.spa, activeDataset == 'Landsat NDVI'),
+                _datasetPill(t('thermal_stress'), 'Thermal Stress', Icons.thermostat, activeDataset == 'Thermal Stress'),
               ],
             ),
           ),
@@ -375,13 +607,13 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
               child: Column(children: [
                 Row(children: [
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('SMAP Moisture Overlay', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                    Text('NASA SMAP L4 • regional context', style: TextStyle(color: const Color(0xffff5cae), fontSize: 12, fontWeight: FontWeight.w700)),
+                    Text('${_datasetLabel(activeDataset)} ${t('overlay')}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                    Text('NASA live granules • ${liveDate == null ? 'waiting' : _shortDate(liveDate!)}', style: const TextStyle(color: Color(0xffff5cae), fontSize: 12, fontWeight: FontWeight.w700)),
                   ])),
-                  const Chip(label: Text('-14 Days'), backgroundColor: Color(0xff123c7d)),
+                  Chip(label: Text(_timeLabel), backgroundColor: const Color(0xff123c7d)),
                 ]),
                 const SizedBox(height: 10),
-                SizedBox(height: 270, child: CustomPaint(painter: DashboardMapPainter())),
+                SizedBox(height: 270, child: CustomPaint(painter: DashboardMapPainter(dataset: activeDataset))),
                 const SizedBox(height: 10),
                 const Wrap(
                   alignment: WrapAlignment.spaceBetween,
@@ -404,14 +636,23 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
               Row(children: [
                 const Icon(Icons.sync, color: Color(0xffff52a7)),
                 const SizedBox(width: 8),
-                const Expanded(child: Text('Forecast Shift Scrubber', style: TextStyle(fontWeight: FontWeight.w800))),
+                Expanded(child: Text(t('forecast_scrubber'), style: const TextStyle(fontWeight: FontWeight.w800))),
                 Text('-14 Days', style: TextStyle(color: const Color(0xffff5cae), fontWeight: FontWeight.w800)),
               ]),
-              Slider(value: 2, min: 0, max: 21, divisions: 21, onChanged: (_) {}),
-              const Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text('-14d', style: TextStyle(color: Color(0xffff5cae))),
-                Text('-7d'), Text('Live'), Text('+3d'), Text('+7d'),
+              Slider(
+                value: timeOffset,
+                min: -14,
+                max: 7,
+                divisions: 21,
+                label: _timeLabel,
+                onChanged: (value) => setState(() => timeOffset = value),
+                onChangeEnd: (_) => _loadLiveDashboard(date: _selectedDate),
+              ),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                const Text('-14d', style: TextStyle(color: Color(0xffff5cae))),
+                const Text('-7d'), const Text('Live'), const Text('+3d'), const Text('+7d'),
               ]),
+              if (refreshing) const LinearProgressIndicator(color: Color(0xffe43e98)),
             ])),
           ),
           const SizedBox(height: 14),
@@ -423,8 +664,53 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
         Text(t('next_season'), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
         Text(t('ranked_for_dry')),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: OutlinedButton.icon(
+            onPressed: applyingPreferences ? null : _collectFieldInformation,
+            icon: applyingPreferences ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.tune),
+            label: Text(applyingPreferences ? t('analyzing_field') : t('tell_field')),
+          ),
+        ),
         const SizedBox(height: 14),
-        ...rotationOptions.asMap().entries.map((entry) => RotationTile(rank: entry.key + 1, option: entry.value)),
+        if (twoSeasonPlan.isNotEmpty) ...[
+          Text(t('two_season_plan'), style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          ...twoSeasonPlan.asMap().entries.map((entry) {
+            final item = entry.value;
+            final reasons = (item['reasons'] as List<dynamic>? ?? const []).whereType<String>().take(2).join(' ');
+            return Card(
+              child: ListTile(
+                leading: CircleAvatar(child: Text('${entry.key + 1}')),
+                title: Text('${item['season'] ?? 'Next season'}: ${item['crop'] ?? 'Review locally'}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                subtitle: Text('$reasons\nRisk: ${item['risk'] ?? 'Confirm locally'} · Confidence: ${item['confidence'] ?? 'Low'}'),
+                isThreeLine: true,
+                trailing: Text((item['score'] as num?)?.toStringAsFixed(0) ?? '—', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xff176b50))),
+              ),
+            );
+          }),
+          const SizedBox(height: 12),
+          Text(t('next_options'), style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+        ],
+        ...liveRotationOptions.asMap().entries.map((entry) => RotationTile(rank: entry.key + 1, option: entry.value, language: language)),
+        if (liveRisks.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(t('risk_analysis'), style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          ...liveRisks.map((risk) => Card(
+                child: ListTile(
+                  leading: Icon(
+                    risk['level'] == 'high' ? Icons.warning_amber : Icons.info_outline,
+                    color: risk['level'] == 'high' ? Colors.red : const Color(0xff9a5c00),
+                  ),
+                  title: Text(risk['title'] as String? ?? 'Field risk'),
+                  subtitle: Text(risk['action'] as String? ?? ''),
+                ),
+              )),
+        ],
         const SizedBox(height: 12),
         _disclaimer(),
       ]);
@@ -444,14 +730,16 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
         selectedIndex: tab,
         onDestinationSelected: (index) => setState(() => tab = index),
         destinations: [
-          NavigationDestination(icon: const Icon(Icons.layers), label: 'Map & Layers'),
-          NavigationDestination(icon: const Icon(Icons.auto_awesome), label: 'Adaptations'),
-          NavigationDestination(icon: const Icon(Icons.monitor_heart), label: 'Telemetry'),
-          NavigationDestination(icon: const Icon(Icons.info_outline), label: 'Details'),
+          NavigationDestination(icon: const Icon(Icons.layers), label: t('map_layers')),
+          NavigationDestination(icon: const Icon(Icons.auto_awesome), label: t('adaptations')),
+          NavigationDestination(icon: const Icon(Icons.monitor_heart), label: t('telemetry')),
+          NavigationDestination(icon: const Icon(Icons.info_outline), label: t('details')),
         ],
       );
 
-  Widget _datasetPill(String label, IconData icon, bool selected) => Container(
+  Widget _datasetPill(String label, String datasetKey, IconData icon, bool selected) => GestureDetector(
+        onTap: () => setState(() => activeDataset = datasetKey),
+        child: Container(
         margin: const EdgeInsets.only(right: 8, top: 6, bottom: 6),
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
@@ -464,7 +752,15 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
           const SizedBox(width: 7),
           Text(label, style: TextStyle(color: selected ? Colors.white : const Color(0xff18263d), fontWeight: FontWeight.w800)),
         ]),
-      );
+      ));
+
+  String _shortDate(DateTime value) => '${value.day.toString().padLeft(2, '0')} ${_month(value.month)}';
+  String _datasetLabel(String value) => value == 'SMAP Moisture'
+      ? t('smap_moisture')
+      : value == 'Landsat NDVI'
+          ? t('landsat_ndvi')
+          : t('thermal_stress');
+  String _month(int value) => const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][value - 1];
 
   Widget _dashboardPlotCard(Plot plot) => Card(
         color: const Color(0xfffbf9fd),
@@ -478,10 +774,10 @@ class _FieldShiftAppState extends State<FieldShiftApp> {
             const Chip(label: Text('Optimal'), backgroundColor: Color(0xff2e65e8)),
           ]),
           const SizedBox(height: 15),
-          const Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-            Metric(label: 'MOISTURE', value: '26.1%', color: Color(0xff31b9ee)),
-            Metric(label: 'NDVI VIGOR', value: '0.71', color: Color(0xffff5cae)),
-            Metric(label: 'CANOPY', value: '30.7°C', color: Color(0xffa9b5ff)),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+          Metric(label: 'MOISTURE', value: processedData == null ? '—' : '${(((processedData!['soil_moisture_outlook'] as num?)?.toDouble() ?? 0) * 100).toStringAsFixed(0)}%', color: const Color(0xff31b9ee)),
+          Metric(label: 'RAINFALL', value: processedData == null ? '—' : '${processedData!['rainfall_mm']} mm', color: const Color(0xffff5cae)),
+          Metric(label: 'TEMPERATURE', value: processedData == null ? '—' : '${processedData!['temperature_c']}°C', color: const Color(0xffa9b5ff)),
           ]),
           const SizedBox(height: 12),
           Text('Updated 12 Nov • Medium confidence • Estimated', style: TextStyle(color: Color(0xff68748b), fontSize: 12)),
@@ -527,9 +823,9 @@ class PlotCard extends StatelessWidget {
             Text(plot.crop, style: Theme.of(context).textTheme.bodyMedium),
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
-              StatusChip(label: t('water'), status: plot.water),
-              StatusChip(label: t('crop_health'), status: plot.health),
-              StatusChip(label: t('heat'), status: plot.heat),
+              StatusChip(label: t('water'), status: plot.water, translate: t),
+              StatusChip(label: t('crop_health'), status: plot.health, translate: t),
+              StatusChip(label: t('heat'), status: plot.heat, translate: t),
             ]),
             const SizedBox(height: 12),
             Text(plot.recommendation, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -545,16 +841,18 @@ class PlotCard extends StatelessWidget {
 }
 
 class StatusChip extends StatelessWidget {
-  const StatusChip({required this.label, required this.status, super.key});
+  const StatusChip({required this.label, required this.status, this.translate, super.key});
   final String label;
   final Status status;
+  final String Function(String)? translate;
   @override
   Widget build(BuildContext context) {
-    final (icon, text, color) = switch (status) {
-      Status.dry => (Icons.water_drop_outlined, 'Needs water', const Color(0xff9a5c00)),
-      Status.okay => (Icons.check_circle_outline, 'OK', const Color(0xff176b50)),
-      Status.wet => (Icons.water, 'Too wet', const Color(0xff155a91)),
+    final (icon, key, color) = switch (status) {
+      Status.dry => (Icons.water_drop_outlined, 'needs_water', const Color(0xff9a5c00)),
+      Status.okay => (Icons.check_circle_outline, 'okay', const Color(0xff176b50)),
+      Status.wet => (Icons.water, 'too_wet', const Color(0xff155a91)),
     };
+    final text = translate?.call(key) ?? const {'needs_water': 'Needs water', 'okay': 'OK', 'too_wet': 'Too wet'}[key]!;
     return Chip(
       avatar: Icon(icon, size: 18, color: color),
       label: Text('$label: $text'),
@@ -565,8 +863,10 @@ class StatusChip extends StatelessWidget {
 }
 
 class PlotDetail extends StatefulWidget {
-  const PlotDetail({required this.plot, required this.t, required this.onBack, super.key});
+  const PlotDetail({required this.plot, required this.options, required this.language, required this.t, required this.onBack, super.key});
   final Plot plot;
+  final List<RotationOption> options;
+  final AppLanguage language;
   final String Function(String) t;
   final VoidCallback onBack;
   @override
@@ -599,29 +899,29 @@ class _PlotDetailState extends State<PlotDetail> {
           ],
         ),
         body: ListView(padding: const EdgeInsets.all(16), children: [
-          Text(widget.plot.crop, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
-          Text('${widget.plot.area.toStringAsFixed(1)} ha · Updated 12 Nov'),
+          Text(localizedPhrase(widget.language, widget.plot.crop), style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
+          Text('${widget.plot.area.toStringAsFixed(1)} ${widget.t('hectares')} · ${widget.t('updated_date')}'),
           const SizedBox(height: 16),
           Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(widget.plot.recommendation, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
             const SizedBox(height: 14),
-            StatusChip(label: widget.t('water'), status: widget.plot.water),
-            StatusChip(label: widget.t('crop_health'), status: widget.plot.health),
-            StatusChip(label: widget.t('heat'), status: widget.plot.heat),
+            StatusChip(label: widget.t('water'), status: widget.plot.water, translate: widget.t),
+            StatusChip(label: widget.t('crop_health'), status: widget.plot.health, translate: widget.t),
+            StatusChip(label: widget.t('heat'), status: widget.plot.heat, translate: widget.t),
           ]))),
           const SizedBox(height: 14),
           Card(child: Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 10), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('14-day water trend', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+            Text(widget.t('water_trend'), style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
             const SizedBox(height: 12),
             SizedBox(height: 110, child: CustomPaint(painter: TrendPainter(widget.plot.water))),
-            Text('Updated 12 Nov · Medium confidence · Estimated', style: Theme.of(context).textTheme.bodySmall),
+            Text(widget.t('updated_estimated'), style: Theme.of(context).textTheme.bodySmall),
           ]))),
           const SizedBox(height: 14),
           Row(children: [
             Expanded(child: Text(widget.t('next_season'), style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800))),
             TextButton(onPressed: () {}, child: Text(widget.t('view_all'))),
           ]),
-          ...rotationOptions.take(3).map((option) => RotationTile(rank: rotationOptions.indexOf(option) + 1, option: option)),
+          ...widget.options.take(3).map((option) => RotationTile(rank: widget.options.indexOf(option) + 1, option: option, language: widget.language)),
           const SizedBox(height: 8),
           Card(
             child: ExpansionTile(
@@ -629,7 +929,7 @@ class _PlotDetailState extends State<PlotDetail> {
               title: Text(widget.t('why')),
               initiallyExpanded: whyOpen,
               onExpansionChanged: (value) => setState(() => whyOpen = value),
-              children: const [Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 16), child: Text('The ranking compares crop family, water fit, soil fit, seasonal heat risk, and season fit.'))],
+              children: [Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 16), child: Text(widget.t('ranking_explanation')))],
             ),
           ),
           const SizedBox(height: 12),
@@ -639,20 +939,21 @@ class _PlotDetailState extends State<PlotDetail> {
 }
 
 class RotationTile extends StatelessWidget {
-  const RotationTile({required this.rank, required this.option, super.key});
+  const RotationTile({required this.rank, required this.option, required this.language, super.key});
   final int rank;
   final RotationOption option;
+  final AppLanguage language;
   @override
   Widget build(BuildContext context) => Card(
         margin: const EdgeInsets.only(bottom: 10),
         child: ListTile(
           leading: CircleAvatar(child: Text('$rank')),
-          title: Text(option.crop, style: const TextStyle(fontWeight: FontWeight.w800)),
-          subtitle: Text('${option.reasons.take(2).join(' ')}\nRisk: ${option.risk} · Water: ${option.water}'),
+          title: Text(localizedPhrase(language, option.crop), style: const TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: Text('${option.reasons.take(2).map((reason) => localizedPhrase(language, reason)).join(' ')}\n${localizedPhrase(language, 'Risk')}: ${localizedPhrase(language, option.risk)} · ${localizedPhrase(language, 'Water')}: ${localizedPhrase(language, option.water)}'),
           isThreeLine: true,
           trailing: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             Text('${option.score.toInt()}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xff176b50))),
-            const Text('score'),
+            Text(localizedPhrase(language, 'score')),
           ]),
         ),
       );
@@ -681,6 +982,9 @@ class FieldMapPainter extends CustomPainter {
 }
 
 class DashboardMapPainter extends CustomPainter {
+  DashboardMapPainter({required this.dataset});
+  final String dataset;
+
   @override
   void paint(Canvas canvas, Size size) {
     final background = Paint()..color = const Color(0xff08152b);
@@ -695,10 +999,10 @@ class DashboardMapPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
     }
     final fields = [
-      (Rect.fromLTWH(size.width * .08, size.height * .12, size.width * .42, size.height * .32), const Color(0xff35b9e8), 'PLOT A-1\n26.1%'),
-      (Rect.fromLTWH(size.width * .54, size.height * .12, size.width * .38, size.height * .30), const Color(0xffc72d55), 'PLOT B-2\n18.5%'),
-      (Rect.fromLTWH(size.width * .08, size.height * .52, size.width * .42, size.height * .32), const Color(0xff2b9bc8), 'PLOT C-3\n24.7%'),
-      (Rect.fromLTWH(size.width * .55, size.height * .53, size.width * .36, size.height * .31), const Color(0xffc52c56), 'PLOT D-4\n16.3%'),
+      (Rect.fromLTWH(size.width * .08, size.height * .12, size.width * .42, size.height * .32), const Color(0xff35b9e8), 'PLOT A-1\nLIVE'),
+      (Rect.fromLTWH(size.width * .54, size.height * .12, size.width * .38, size.height * .30), const Color(0xffc72d55), 'PLOT B-2\nLIVE'),
+      (Rect.fromLTWH(size.width * .08, size.height * .52, size.width * .42, size.height * .32), const Color(0xff2b9bc8), 'PLOT C-3\nLIVE'),
+      (Rect.fromLTWH(size.width * .55, size.height * .53, size.width * .36, size.height * .31), const Color(0xffc52c56), 'PLOT D-4\nLIVE'),
     ];
     for (final (rect, color, label) in fields) {
       canvas.drawPath(
@@ -714,7 +1018,7 @@ class DashboardMapPainter extends CustomPainter {
         border,
       );
       final text = TextPainter(
-        text: TextSpan(text: label, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900)),
+        text: TextSpan(text: '$label\n$dataset', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900)),
         textDirection: TextDirection.ltr,
         textAlign: TextAlign.center,
       )..layout();
@@ -776,6 +1080,64 @@ class TrendPainter extends CustomPainter {
   bool shouldRepaint(CustomPainter oldDelegate) => false;
 }
 
+String localizedPhrase(AppLanguage language, String value) {
+  const hindi = {
+    'Pigeon pea (tur)': 'अरहर (तूर)',
+    'Green gram (moong)': 'मूंग',
+    'Chickpea (gram)': 'चना',
+    'Soybean': 'सोयाबीन',
+    'Sorghum (jowar)': 'ज्वार',
+    'Maize': 'मक्का',
+    'Wheat': 'गेहूं',
+    'Sunflower': 'सूरजमुखी',
+    'Rice': 'चावल',
+    'Cotton': 'कपास',
+    'Mandarin orchard': 'संतरा बाग',
+    'Low': 'कम',
+    'Medium': 'मध्यम',
+    'High': 'अधिक',
+    'Risk': 'जोखिम',
+    'Water': 'पानी',
+    'score': 'स्कोर',
+    'Changes the crop family and helps restore soil nitrogen.': 'फसल परिवार बदलता है और मिट्टी में नाइट्रोजन सुधारने में मदद करता है।',
+    'Breaks the previous crop family pattern.': 'पिछली फसल के परिवार को बदलता है।',
+    'Low water need fits the drier outlook.': 'कम पानी की जरूरत सूखे अनुमान के अनुकूल है।',
+    'The recorded soil pH is in its suitable range.': 'दर्ज मिट्टी का pH इसके लिए उपयुक्त है।',
+    'Not the strongest fit for the next season; confirm the sowing window.': 'अगले मौसम के लिए यह सबसे अच्छा विकल्प नहीं है; बुवाई का समय जांचें।',
+    'Monitor pests and confirm the local soil test before planting.': 'कीटों पर नजर रखें और बुवाई से पहले स्थानीय मिट्टी जांच कराएं।',
+    'Pests and diseases can carry over in the same crop family.': 'एक ही फसल परिवार में कीट और रोग बने रह सकते हैं।',
+  };
+  const marathi = {
+    'Pigeon pea (tur)': 'तूर',
+    'Green gram (moong)': 'मूग',
+    'Chickpea (gram)': 'हरभरा',
+    'Soybean': 'सोयाबीन',
+    'Sorghum (jowar)': 'ज्वारी',
+    'Maize': 'मका',
+    'Wheat': 'गहू',
+    'Sunflower': 'सूर्यफूल',
+    'Rice': 'भात',
+    'Cotton': 'कापूस',
+    'Mandarin orchard': 'संत्र्याची बाग',
+    'Low': 'कमी',
+    'Medium': 'मध्यम',
+    'High': 'जास्त',
+    'Risk': 'जोखीम',
+    'Water': 'पाणी',
+    'score': 'गुण',
+    'Changes the crop family and helps restore soil nitrogen.': 'पीक कुटुंब बदलते आणि जमिनीतील नायट्रोजन सुधारण्यास मदत करते.',
+    'Breaks the previous crop family pattern.': 'मागील पीक कुटुंबाचा क्रम बदलते.',
+    'Low water need fits the drier outlook.': 'कमी पाण्याची गरज कोरड्या अंदाजासाठी योग्य आहे.',
+    'The recorded soil pH is in its suitable range.': 'नोंदवलेला मातीचा pH यासाठी योग्य आहे.',
+    'Not the strongest fit for the next season; confirm the sowing window.': 'पुढील हंगामासाठी हा सर्वोत्तम पर्याय नाही; पेरणीची वेळ तपासा.',
+    'Monitor pests and confirm the local soil test before planting.': 'कीटकांवर लक्ष ठेवा आणि पेरणीपूर्वी स्थानिक माती तपासणी करा.',
+    'Pests and diseases can carry over in the same crop family.': 'त्याच पीक कुटुंबातील कीड आणि रोग पुढे राहू शकतात.',
+  };
+  if (language == AppLanguage.hindi) return hindi[value] ?? value;
+  if (language == AppLanguage.marathi) return marathi[value] ?? value;
+  return value;
+}
+
 const translations = <AppLanguage, Map<String, String>>{
   AppLanguage.english: {
     'region': 'Nagpur district, Maharashtra',
@@ -795,6 +1157,41 @@ const translations = <AppLanguage, Map<String, String>>{
     'ranked_for_dry': 'Ranked options for the selected dry plot.',
     'view_all': 'View all',
     'why': 'Why this advice?',
+    'tell_field': 'Tell us about your field',
+    'field_form_help': 'This helps personalize the two-season recommendation. Soil type is optional.',
+    'set_priorities': 'Set your priorities',
+    'priority_help': 'Move the bars higher for what matters most to you.',
+    'analyze_field': 'Analyze my field',
+    'live_required': 'NASA LIVE DATA REQUIRED',
+    'gateway_hint': 'This starts the NASA gateway and Flutter together.',
+    'retry_live': 'Retry live connection',
+    'analyzing_field': 'Analyzing field...',
+    'two_season_plan': 'Two-season plan',
+    'next_options': 'Next-season options',
+    'risk_analysis': 'Risk analysis',
+    'priority_less_water': 'Less water',
+    'priority_income': 'Better income',
+    'priority_soil': 'Fit my soil',
+    'priority_climate': 'Climate resilience',
+    'current_crop': 'Current or last crop',
+    'soil_type': 'Soil type (optional)',
+    'soil_unknown': 'Choose if known',
+    'needs_water': 'Needs water',
+    'okay': 'OK',
+    'too_wet': 'Too wet',
+    'smap_moisture': 'SMAP Moisture',
+    'landsat_ndvi': 'Landsat NDVI',
+    'thermal_stress': 'Thermal Stress',
+    'overlay': 'Overlay',
+    'forecast_scrubber': 'Forecast Shift Scrubber',
+    'map_layers': 'Map & Layers',
+    'adaptations': 'Adaptations',
+    'telemetry': 'Telemetry',
+    'hectares': 'ha',
+    'updated_date': 'Updated 12 Nov',
+    'water_trend': '14-day water trend',
+    'updated_estimated': 'Updated 12 Nov · Medium confidence · Estimated',
+    'ranking_explanation': 'The ranking compares crop family, water fit, soil fit, seasonal heat risk, and season fit.',
     'disclaimer': 'Estimates from satellite and climate data. Confirm with a local soil test and your agriculture officer.',
   },
   AppLanguage.hindi: {
@@ -815,6 +1212,41 @@ const translations = <AppLanguage, Map<String, String>>{
     'ranked_for_dry': 'सूखे खेत के लिए सबसे अच्छे विकल्प।',
     'view_all': 'सभी देखें',
     'why': 'यह सलाह क्यों?',
+    'tell_field': 'अपने खेत के बारे में बताएं',
+    'field_form_help': 'इससे दो मौसम की सलाह आपकी जरूरत के अनुसार बनेगी। मिट्टी का प्रकार देना जरूरी नहीं है।',
+    'set_priorities': 'अपनी प्राथमिकताएं चुनें',
+    'priority_help': 'जिस बात का महत्व अधिक है, उसका बार ऊपर करें।',
+    'analyze_field': 'मेरे खेत का विश्लेषण करें',
+    'live_required': 'NASA लाइव डेटा आवश्यक है',
+    'gateway_hint': 'यह NASA गेटवे और Flutter दोनों शुरू करता है।',
+    'retry_live': 'लाइव कनेक्शन फिर कोशिश करें',
+    'analyzing_field': 'खेत का विश्लेषण हो रहा है...',
+    'two_season_plan': 'दो मौसम की योजना',
+    'next_options': 'अगले मौसम के विकल्प',
+    'risk_analysis': 'जोखिम विश्लेषण',
+    'priority_less_water': 'कम पानी',
+    'priority_income': 'बेहतर आय',
+    'priority_soil': 'मेरी मिट्टी के अनुसार',
+    'priority_climate': 'जलवायु सहनशीलता',
+    'current_crop': 'वर्तमान या पिछली फसल',
+    'soil_type': 'मिट्टी का प्रकार (वैकल्पिक)',
+    'soil_unknown': 'यदि पता हो तो चुनें',
+    'needs_water': 'पानी चाहिए',
+    'okay': 'ठीक',
+    'too_wet': 'बहुत गीला',
+    'smap_moisture': 'SMAP नमी',
+    'landsat_ndvi': 'Landsat NDVI',
+    'thermal_stress': 'गर्मी का तनाव',
+    'overlay': 'परत',
+    'forecast_scrubber': 'पूर्वानुमान समय पट्टी',
+    'map_layers': 'नक्शा और परतें',
+    'adaptations': 'अनुकूलन',
+    'telemetry': 'माप',
+    'hectares': 'हेक्टेयर',
+    'updated_date': '12 नवंबर को अपडेट',
+    'water_trend': '14 दिनों की पानी की स्थिति',
+    'updated_estimated': '12 नवंबर को अपडेट · मध्यम भरोसा · अनुमानित',
+    'ranking_explanation': 'यह रैंकिंग फसल परिवार, पानी, मिट्टी, मौसम के खतरे और मौसम के अनुसार बनाई गई है।',
     'disclaimer': 'उपग्रह और जलवायु डेटा के अनुमान। स्थानीय मिट्टी जांच और कृषि अधिकारी से पुष्टि करें।',
   },
   AppLanguage.marathi: {
@@ -835,6 +1267,41 @@ const translations = <AppLanguage, Map<String, String>>{
     'ranked_for_dry': 'कोरड्या शेतासाठी सर्वोत्तम पर्याय.',
     'view_all': 'सर्व पहा',
     'why': 'हा सल्ला का?',
+    'tell_field': 'तुमच्या शेताबद्दल सांगा',
+    'field_form_help': 'यामुळे दोन हंगामांचा सल्ला तुमच्या गरजेनुसार मिळेल. मातीचा प्रकार ऐच्छिक आहे.',
+    'set_priorities': 'तुमच्या प्राधान्यक्रमांची निवड करा',
+    'priority_help': 'ज्याला जास्त महत्त्व आहे तो बार वर करा.',
+    'analyze_field': 'माझ्या शेताचे विश्लेषण करा',
+    'live_required': 'NASA लाईव्ह डेटा आवश्यक आहे',
+    'gateway_hint': 'यामुळे NASA गेटवे आणि Flutter दोन्ही सुरू होतात.',
+    'retry_live': 'लाईव्ह कनेक्शन पुन्हा प्रयत्न करा',
+    'analyzing_field': 'शेताचे विश्लेषण सुरू आहे...',
+    'two_season_plan': 'दोन हंगामांची योजना',
+    'next_options': 'पुढील हंगामाचे पर्याय',
+    'risk_analysis': 'जोखीम विश्लेषण',
+    'priority_less_water': 'कमी पाणी',
+    'priority_income': 'चांगले उत्पन्न',
+    'priority_soil': 'माझ्या मातीसाठी योग्य',
+    'priority_climate': 'हवामान सहनशीलता',
+    'current_crop': 'सध्याचे किंवा मागील पीक',
+    'soil_type': 'मातीचा प्रकार (ऐच्छिक)',
+    'soil_unknown': 'माहित असल्यास निवडा',
+    'needs_water': 'पाण्याची गरज',
+    'okay': 'ठीक',
+    'too_wet': 'खूप ओले',
+    'smap_moisture': 'SMAP ओलावा',
+    'landsat_ndvi': 'Landsat NDVI',
+    'thermal_stress': 'उष्णतेचा ताण',
+    'overlay': 'थर',
+    'forecast_scrubber': 'अंदाज वेळ पट्टी',
+    'map_layers': 'नकाशा आणि थर',
+    'adaptations': 'अनुकूलन',
+    'telemetry': 'मोजमाप',
+    'hectares': 'हेक्टर',
+    'updated_date': '12 नोव्हेंबरला अपडेट',
+    'water_trend': '14 दिवसांचा पाण्याचा कल',
+    'updated_estimated': '12 नोव्हेंबरला अपडेट · मध्यम विश्वास · अंदाजे',
+    'ranking_explanation': 'ही क्रमवारी पीक कुटुंब, पाणी, माती, हंगामी हवामानाचा धोका आणि हंगामावर आधारित आहे.',
     'disclaimer': 'उपग्रह आणि हवामान डेटावर आधारित अंदाज. स्थानिक माती तपासणी आणि कृषी अधिकाऱ्यांकडून खात्री करा.',
   },
 };

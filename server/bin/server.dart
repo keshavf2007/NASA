@@ -25,7 +25,8 @@ Future<void> main() async {
       return Response(400, body: jsonEncode({'error': 'lat and lon are required'}));
     }
     try {
-      final result = await gateway.dashboard(latitude: latitude, longitude: longitude);
+      final requestedDate = DateTime.tryParse(request.url.queryParameters['date'] ?? '');
+      final result = await gateway.dashboard(latitude: latitude, longitude: longitude, date: requestedDate);
       return _json(result);
     } catch (error) {
       return _json({'error': 'NASA live request failed', 'detail': error.toString()}, status: 502);
@@ -41,6 +42,32 @@ Future<void> main() async {
         'srtm': {'provider': 'NASA', 'resolution': '30 m', 'role': 'terrain'},
         'nex_gddp_cmip6': {'provider': 'NASA', 'resolution': 'about 25 km', 'role': 'climate scenarios'},
       }));
+
+  router.post('/api/recommendations', (Request request) async {
+    try {
+      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final weather = (body['weather'] as Map<String, dynamic>?) ?? const {};
+      final priorities = (body['priorities'] as List<dynamic>? ?? const []).whereType<String>().toList();
+      final priorityWeights = ((body['priority_weights'] as Map<String, dynamic>?) ?? const {}).map(
+        (key, value) => MapEntry(key, (value as num).toDouble()),
+      );
+      final result = gateway.analyzeRotation(
+        currentCrop: body['current_crop'] as String? ?? 'Cotton',
+        season: body['season'] as String? ?? 'Rabi',
+        soilPh: (body['soil_ph'] as num?)?.toDouble() ?? 6.7,
+        soilMoisture: (weather['soil_moisture_outlook'] as num?)?.toDouble() ?? 0.5,
+        rainfallMm: (weather['rainfall_mm'] as num?)?.toDouble() ?? 0,
+        temperatureC: (weather['temperature_c'] as num?)?.toDouble() ?? 0,
+        weatherValid: weather['weather_valid'] as bool? ?? false,
+        priorities: priorities,
+        priorityWeights: priorityWeights,
+        soilType: body['soil_type'] as String?,
+      );
+      return _json(result);
+    } catch (error) {
+      return _json({'error': 'Invalid recommendation request', 'detail': error.toString()}, status: 400);
+    }
+  });
 
   router.get('/api/granules', (Request request) async {
     final latitude = double.tryParse(request.url.queryParameters['lat'] ?? '');

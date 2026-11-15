@@ -1,0 +1,39 @@
+{
+  "plots": [
+    {
+      "id": "cotton-dry",
+      "name": "Cotton field",
+      "crop": "Cotton",
+      "area_ha": 1.2,
+      "point": {"latitude": 21.1458, "longitude": 79.0882}
+    },
+    {
+      "id": "soybean-ok",
+      "name": "Soybean field",
+      "crop": "Soybean",
+      "area_ha": 0.9,
+      "point": {"latitude": 21.1521, "longitude": 79.0964}
+    },
+    {
+      "id": "chickpea-wet",
+      "name": "Chickpea field",
+      "crop": "Chickpea",
+      "area_ha": 1.0,
+      "point": {"latitude": 21.1374, "longitude": 79.0795}
+    },
+    {
+      "id": "fallow",
+      "name": "Fallow field",
+      "crop": "Sorghum",
+      "area_ha": 0.7,
+      "point": {"latitude": 21.1588, "longitude": 79.0712}
+    },
+    {
+      "id": "mandarin",
+      "name": "Mandarin orchard",
+      "crop": "Mandarin",
+      "area_ha": 1.5,
+      "point": {"latitude": 21.1292, "longitude": 79.1031}
+    }
+  ]
+}

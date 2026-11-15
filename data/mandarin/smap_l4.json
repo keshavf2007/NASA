@@ -1,0 +1,14 @@
+{
+  "confidence": "Low",
+  "dataset_id": "SPL4SMGP.007",
+  "estimated": false,
+  "fetched_at": "2026-11-15T00:46:50.047741+00:00",
+  "observed_at": null,
+  "quality_flags": [
+    "live retrieval failed",
+    "EARTHDATA_TOKEN is required for SMAP, HLS, and MODIS retrieval."
+  ],
+  "resolution_m": 9000,
+  "source": "NASA SMAP L4",
+  "values": null
+}

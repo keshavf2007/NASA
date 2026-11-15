@@ -1,0 +1,66 @@
+{
+  "nasa_power": {
+    "dataset_id": "POWER",
+    "endpoint": "https://power.larc.nasa.gov/api/temporal/daily/point",
+    "resolution_m": 50000,
+    "resolution_label": "about 50 km",
+    "provider": "NASA",
+    "parameters": ["PRECTOTCORR", "T2M", "T2M_MAX"],
+    "requires_auth": false
+  },
+  "soilgrids": {
+    "dataset_id": "soilgrids",
+    "endpoint": "https://rest.isric.org/soilgrids/v2.0/properties/query",
+    "resolution_m": 250,
+    "resolution_label": "about 250 m",
+    "provider": "ISRIC SoilGrids",
+    "properties": ["phh2o", "soc", "nitrogen", "clay", "sand", "silt"],
+    "requires_auth": false
+  },
+  "srtm": {
+    "dataset_id": "SRTMGL1",
+    "catalog_endpoint": "https://lpdaac.usgs.gov/products/srtmgl1v003/",
+    "value_endpoint": null,
+    "resolution_m": 30,
+    "resolution_label": "30 m",
+    "provider": "NASA/USGS",
+    "requires_auth": true,
+    "verification_note": "The catalog URL is not a point-value API. Configure and verify a SRTM value service before enabling live retrieval."
+  },
+  "smap_l4": {
+    "dataset_id": "SPL4SMGP.007",
+    "short_name": "SPL4SMGP",
+    "endpoint": "https://search.earthdata.nasa.gov/search",
+    "resolution_m": 9000,
+    "resolution_label": "about 9 km",
+    "provider": "NASA SMAP L4",
+    "requires_auth": true,
+    "role": "regional soil-moisture context"
+  },
+  "hls": {
+    "dataset_id": "HLSL30/HLSS30",
+    "short_names": ["HLSL30", "HLSS30"],
+    "endpoint": "https://search.earthdata.nasa.gov/search",
+    "resolution_m": 30,
+    "resolution_label": "30 m",
+    "provider": "NASA/USGS HLS",
+    "requires_auth": true,
+    "role": "plot-level crop health"
+  },
+  "modis_ndvi": {
+    "dataset_id": "MOD13Q1",
+    "short_name": "MOD13Q1",
+    "endpoint": "https://search.earthdata.nasa.gov/search",
+    "resolution_m": 250,
+    "resolution_label": "250 m",
+    "provider": "NASA MODIS",
+    "requires_auth": true,
+    "role": "longer NDVI history"
+  },
+  "downscaling": {
+    "method": "regional SMAP anomaly adjusted by plot NDVI anomaly, soil texture and terrain/slope",
+    "max_adjustment_fraction": 0.25,
+    "output_label": "estimated",
+    "confidence_rule": "Use Low confidence when any required plot attribute is missing."
+  }
+}

@@ -24,6 +24,60 @@ flutter build web
 
 Do not run only `flutter run` in strict live mode; that starts the app without the NASA gateway and will correctly show the live-data-required screen.
 
+## Run on a physical Android phone over USB
+
+USB debugging does not automatically make the phone's `127.0.0.1` reach the
+Mac. The launcher creates an ADB reverse tunnel, so the phone can use the
+local gateway safely without Wi-Fi.
+
+1. Enable Developer options and USB debugging.
+2. Connect the phone by USB and accept the RSA authorization prompt.
+3. Install ADB if it is not already installed:
+
+   ```bash
+   brew install android-platform-tools
+   ```
+
+4. Verify the device:
+
+   ```bash
+   adb devices
+   flutter devices
+   ```
+
+5. Start the app using the Flutter device ID:
+
+   ```bash
+   ./scripts/run_live.sh YOUR_ANDROID_DEVICE_ID
+   ```
+
+The script runs `adb reverse tcp:8080 tcp:8080` and launches Flutter with
+`http://127.0.0.1:8080/api`. Keep the USB cable connected while using the app.
+
+## Run on a physical phone over Wi-Fi
+
+The phone and Mac must be on the same Wi-Fi network. The Mac runs the NASA gateway; the phone runs the Flutter app and connects to the Mac's LAN IP.
+
+1. Verify the phone appears:
+
+   ```bash
+   flutter devices
+   ```
+
+2. Use the device ID from that command:
+
+   ```bash
+   ./scripts/run_live.sh YOUR_DEVICE_ID
+   ```
+
+The launcher automatically finds the Mac's Wi-Fi IP and passes it to Flutter. If it cannot find it, use:
+
+```bash
+API_HOST=192.168.1.42 ./scripts/run_live.sh YOUR_DEVICE_ID
+```
+
+Do not use `127.0.0.1` for a physical phone. That points back to the phone, not the Mac. macOS may ask to allow incoming connections for the Dart gateway; allow it.
+
 The current app includes the five demo plots, plain-language statuses, rotation rankings, details/source cards, language switching, text-to-speech, WhatsApp sharing, and a low-data map view.
 
 The header location button requests device/browser location permission, sends the detected latitude/longitude to the Dart gateway, and refreshes the live NASA dashboard request. Web location requires a secure context; `localhost` is allowed during local development.

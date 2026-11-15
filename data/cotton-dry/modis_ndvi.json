@@ -1,0 +1,14 @@
+{
+  "confidence": "Low",
+  "dataset_id": "MOD13Q1",
+  "estimated": false,
+  "fetched_at": "2026-11-15T00:46:58.504053+00:00",
+  "observed_at": null,
+  "quality_flags": [
+    "live retrieval failed",
+    "EARTHDATA_TOKEN is required for SMAP, HLS, and MODIS retrieval."
+  ],
+  "resolution_m": 250,
+  "source": "NASA MODIS",
+  "values": null
+}
